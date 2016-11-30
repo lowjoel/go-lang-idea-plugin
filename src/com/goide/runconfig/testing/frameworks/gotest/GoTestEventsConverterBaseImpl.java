@@ -31,10 +31,16 @@ import org.jetbrains.annotations.Nullable;
 
 import java.text.ParseException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public abstract class GoTestEventsConverterBaseImpl extends OutputToGeneralTestEventsConverter implements GoTestEventsConverterBase {
   public enum TestResult {PASSED, FAILED, SKIPPED}
+
+  private static class SubtestResult {
+    public TestResult Result = TestResult.FAILED;
+  }
 
   @Nullable
   private ServiceMessageVisitor myVisitor;
@@ -42,10 +48,10 @@ public abstract class GoTestEventsConverterBaseImpl extends OutputToGeneralTestE
   private String myCurrentTestName;
   @NotNull
   private List<String> myCurrentSubtestNames = new ArrayList<>();
+  @NotNull
+  private Map<String, SubtestResult> myCurrentSubtestResults = new HashMap<>();
   @Nullable
   private String myCurrentOutputTestName;
-  @Nullable
-  private TestResult myCurrentTestResult;
   private long myCurrentTestStart;
 
   public GoTestEventsConverterBaseImpl(@NotNull String testFrameworkName, @NotNull TestConsoleProperties consoleProperties) {
@@ -138,8 +144,8 @@ public abstract class GoTestEventsConverterBaseImpl extends OutputToGeneralTestE
     }
     myCurrentTestName = testName;
     myCurrentSubtestNames.add(subtestName);
+    myCurrentSubtestResults.put(subtestName, new SubtestResult());
     myCurrentOutputTestName = testName + subtestName;
-    myCurrentTestResult = null;
     myCurrentTestStart = System.currentTimeMillis();
 
     String testStartedMessage = ServiceMessageBuilder.testStarted(testName + subtestName).addAttribute("locationHint", testUrl(testName)).toString();
@@ -152,7 +158,7 @@ public abstract class GoTestEventsConverterBaseImpl extends OutputToGeneralTestE
       if (!finishDelayedTest(myVisitor)) {
         if (myCurrentTestName != null) {
           while (!myCurrentSubtestNames.isEmpty()) {
-            finishTestInner(myCurrentTestName, getCurrentSubtestName(), TestResult.PASSED, myVisitor);
+            finishTestInner(myCurrentTestName, getCurrentSubtestName(), myVisitor);
           }
         }
       }
@@ -168,20 +174,17 @@ public abstract class GoTestEventsConverterBaseImpl extends OutputToGeneralTestE
     if (subtestName == null) {
       subtestName = "";
     }
-    if (isCurrentlyRunningTest(name, subtestName)) {
-      if (myCurrentTestResult == null) {
-        // delay finishing test, we'll use it as a container for future output
-        myCurrentTestResult = result;
-      }
+    if (isCurrentlyRunningTest(name)) {
+      myCurrentSubtestResults.get(subtestName).Result = result;
       return;
     }
-    finishTestInner(name, subtestName, result, visitor);
+    finishTestInner(name, subtestName, visitor);
   }
 
   protected boolean finishDelayedTest(ServiceMessageVisitor visitor) throws ParseException {
-    if (myCurrentTestName != null && myCurrentTestResult != null) {
+    if (myCurrentTestName != null) {
       while (!myCurrentSubtestNames.isEmpty()) {
-        finishTestInner(myCurrentTestName, getCurrentSubtestName(), myCurrentTestResult, visitor);
+        finishTestInner(myCurrentTestName, getCurrentSubtestName(), visitor);
       }
       return true;
     }
@@ -198,14 +201,15 @@ public abstract class GoTestEventsConverterBaseImpl extends OutputToGeneralTestE
 
   private void finishTestInner(@NotNull String name,
                                @NotNull String subtestName,
-                               @NotNull TestResult result,
                                @Nullable ServiceMessageVisitor visitor) throws ParseException {
-    if (isCurrentlyRunningTest(name, subtestName)) {
+    TestResult result = TestResult.FAILED;
+    if (isCurrentlyRunningTest(name)) {
       myCurrentSubtestNames.remove(subtestName);
+      result = myCurrentSubtestResults.get(subtestName).Result;
+      myCurrentSubtestResults.remove(subtestName);
       if (myCurrentSubtestNames.isEmpty()) {
         myCurrentTestName = null;
         myCurrentOutputTestName = null;
-        myCurrentTestResult = null;
       }
       else {
         myCurrentOutputTestName = myCurrentTestName + getCurrentSubtestName();
