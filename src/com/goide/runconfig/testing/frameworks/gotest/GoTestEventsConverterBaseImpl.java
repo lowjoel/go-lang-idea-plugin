@@ -30,6 +30,8 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.text.ParseException;
+import java.util.ArrayList;
+import java.util.List;
 
 public abstract class GoTestEventsConverterBaseImpl extends OutputToGeneralTestEventsConverter implements GoTestEventsConverterBase {
   public enum TestResult {PASSED, FAILED, SKIPPED}
@@ -38,6 +40,10 @@ public abstract class GoTestEventsConverterBaseImpl extends OutputToGeneralTestE
   private ServiceMessageVisitor myVisitor;
   @Nullable
   private String myCurrentTestName;
+  @NotNull
+  private List<String> myCurrentSubtestNames = new ArrayList<>();
+  @Nullable
+  private String myCurrentOutputTestName;
   @Nullable
   private TestResult myCurrentTestResult;
   private long myCurrentTestStart;
@@ -51,7 +57,20 @@ public abstract class GoTestEventsConverterBaseImpl extends OutputToGeneralTestE
   
   @Nullable
   protected String getCurrentTestName() {
+    String subtestName = getCurrentSubtestName();
+    if (myCurrentTestName != null && subtestName != null) {
+      return myCurrentTestName + subtestName;
+    }
+
     return myCurrentTestName;
+  }
+
+  @Nullable
+  protected String getCurrentSubtestName() {
+    if (myCurrentSubtestNames.size() == 0) {
+      return null;
+    }
+    return myCurrentSubtestNames.get(myCurrentSubtestNames.size() - 1);
   }
 
   @Override
@@ -80,9 +99,9 @@ public abstract class GoTestEventsConverterBaseImpl extends OutputToGeneralTestE
       return;
     }
     boolean isErrorMessage = ProcessOutputTypes.STDERR == outputType;
-    if (myCurrentTestName != null) {
-      ServiceMessageBuilder builder = isErrorMessage ? ServiceMessageBuilder.testStdErr(myCurrentTestName)
-                                                     : ServiceMessageBuilder.testStdOut(myCurrentTestName);
+    if (myCurrentOutputTestName != null) {
+      ServiceMessageBuilder builder = isErrorMessage ? ServiceMessageBuilder.testStdErr(myCurrentOutputTestName)
+                                                     : ServiceMessageBuilder.testStdOut(myCurrentOutputTestName);
       super.processServiceMessages(builder.addAttribute("out", text).toString(), outputType, visitor);
       return;
     }
@@ -97,22 +116,33 @@ public abstract class GoTestEventsConverterBaseImpl extends OutputToGeneralTestE
     super.processServiceMessages(messageBuilder.toString(), outputType, visitor);
   }
 
+  protected void startTestOutput(@NotNull String testName) {
+    myCurrentOutputTestName = testName;
+  }
+
   @Override
   public void dispose() {
     myVisitor = null;
     super.dispose();
   }
 
-  protected void startTest(@NotNull String testName, @Nullable ServiceMessageVisitor visitor) throws ParseException {
-    if (isCurrentlyRunningTest(testName)) {
+  protected void startTest(@NotNull String testName, @Nullable String subtestName, @Nullable ServiceMessageVisitor visitor) throws ParseException {
+    if (subtestName == null) {
+      subtestName = "";
+    }
+    if (isCurrentlyRunningTest(testName, subtestName)) {
       return;
     }
-    finishDelayedTest(visitor);
+    if (!isCurrentlyRunningTest(testName)) {
+      finishDelayedTest(visitor);
+    }
     myCurrentTestName = testName;
+    myCurrentSubtestNames.add(subtestName);
+    myCurrentOutputTestName = testName + subtestName;
     myCurrentTestResult = null;
     myCurrentTestStart = System.currentTimeMillis();
 
-    String testStartedMessage = ServiceMessageBuilder.testStarted(testName).addAttribute("locationHint", testUrl(testName)).toString();
+    String testStartedMessage = ServiceMessageBuilder.testStarted(testName + subtestName).addAttribute("locationHint", testUrl(testName)).toString();
     super.processServiceMessages(testStartedMessage, null, visitor);
   }
 
@@ -121,7 +151,9 @@ public abstract class GoTestEventsConverterBaseImpl extends OutputToGeneralTestE
     try {
       if (!finishDelayedTest(myVisitor)) {
         if (myCurrentTestName != null) {
-          finishTestInner(myCurrentTestName, TestResult.PASSED, myVisitor);
+          while (!myCurrentSubtestNames.isEmpty()) {
+            finishTestInner(myCurrentTestName, getCurrentSubtestName(), TestResult.PASSED, myVisitor);
+          }
         }
       }
     }
@@ -131,21 +163,26 @@ public abstract class GoTestEventsConverterBaseImpl extends OutputToGeneralTestE
     super.flushBufferBeforeTerminating();
   }
 
-  protected void finishTest(@NotNull String name, @NotNull TestResult result, @Nullable ServiceMessageVisitor visitor)
+  protected void finishTest(@NotNull String name, @Nullable String subtestName, @NotNull TestResult result, @Nullable ServiceMessageVisitor visitor)
     throws ParseException {
-    if (isCurrentlyRunningTest(name)) {
+    if (subtestName == null) {
+      subtestName = "";
+    }
+    if (isCurrentlyRunningTest(name, subtestName)) {
       if (myCurrentTestResult == null) {
         // delay finishing test, we'll use it as a container for future output
         myCurrentTestResult = result;
       }
       return;
     }
-    finishTestInner(name, result, visitor);
+    finishTestInner(name, subtestName, result, visitor);
   }
 
   protected boolean finishDelayedTest(ServiceMessageVisitor visitor) throws ParseException {
     if (myCurrentTestName != null && myCurrentTestResult != null) {
-      finishTestInner(myCurrentTestName, myCurrentTestResult, visitor);
+      while (!myCurrentSubtestNames.isEmpty()) {
+        finishTestInner(myCurrentTestName, getCurrentSubtestName(), myCurrentTestResult, visitor);
+      }
       return true;
     }
     return false;
@@ -155,27 +192,39 @@ public abstract class GoTestEventsConverterBaseImpl extends OutputToGeneralTestE
     return testName.equals(myCurrentTestName);
   }
 
+  private boolean isCurrentlyRunningTest(@NotNull String testName, @NotNull String subtestName) {
+    return isCurrentlyRunningTest(testName) && myCurrentSubtestNames.contains(subtestName);
+  }
+
   private void finishTestInner(@NotNull String name,
+                               @NotNull String subtestName,
                                @NotNull TestResult result,
                                @Nullable ServiceMessageVisitor visitor) throws ParseException {
-    if (isCurrentlyRunningTest(name)) {
-      myCurrentTestName = null;
-      myCurrentTestResult = null;
+    if (isCurrentlyRunningTest(name, subtestName)) {
+      myCurrentSubtestNames.remove(subtestName);
+      if (myCurrentSubtestNames.isEmpty()) {
+        myCurrentTestName = null;
+        myCurrentOutputTestName = null;
+        myCurrentTestResult = null;
+      }
+      else {
+        myCurrentOutputTestName = myCurrentTestName + getCurrentSubtestName();
+      }
     }
     String duration = myCurrentTestStart > 0 ? Long.toString(System.currentTimeMillis() - myCurrentTestStart) : null;
     switch (result) {
       case PASSED:
         break;
       case FAILED:
-        String failedMessage = ServiceMessageBuilder.testFailed(name).addAttribute("message", "").toString();
+        String failedMessage = ServiceMessageBuilder.testFailed(name + subtestName).addAttribute("message", "").toString();
         super.processServiceMessages(failedMessage, null, visitor);
         break;
       case SKIPPED:
-        String skipMessage = ServiceMessageBuilder.testIgnored(name).addAttribute("message", "").toString();
+        String skipMessage = ServiceMessageBuilder.testIgnored(name + subtestName).addAttribute("message", "").toString();
         super.processServiceMessages(skipMessage, null, visitor);
         break;
     }
-    String finishedMessage = ServiceMessageBuilder.testFinished(name).addAttribute("duration", duration).toString();
+    String finishedMessage = ServiceMessageBuilder.testFinished(name + subtestName).addAttribute("duration", duration).toString();
     super.processServiceMessages(finishedMessage, null, visitor);
   }
 

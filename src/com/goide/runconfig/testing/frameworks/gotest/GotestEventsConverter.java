@@ -41,22 +41,25 @@ public class GotestEventsConverter extends GoTestEventsConverterBaseImpl {
   protected int processLine(@NotNull String line, int start, Key outputType, ServiceMessageVisitor visitor) throws ParseException {
     Matcher matcher;
     if ((matcher = RUN.matcher(line)).find(start)) {
-      startTest(matcher.group(1), visitor);
+      startTest(matcher.group(2), matcher.group(3), visitor);
       return line.length();
     }
     if ((matcher = SKIP.matcher(line)).find(start)) {
+      startTestOutput(matcher.group(1));
       processOutput(line.substring(start, matcher.start()), outputType, visitor);
-      finishTest(matcher.group(1), TestResult.SKIPPED, visitor);
+      finishTest(matcher.group(2), matcher.group(3), TestResult.SKIPPED, visitor);
       return line.length();
     }
     if ((matcher = FAILED.matcher(line)).find(start)) {
+      startTestOutput(matcher.group(1));
       processOutput(line.substring(start, matcher.start()), outputType, visitor);
-      finishTest(matcher.group(1), TestResult.FAILED, visitor);
+      finishTest(matcher.group(2), matcher.group(3), TestResult.FAILED, visitor);
       return line.length();
     }
     if ((matcher = PASSED.matcher(line)).find(start)) {
+      startTestOutput(matcher.group(1));
       processOutput(line.substring(start, matcher.start()), outputType, visitor);
-      finishTest(matcher.group(1), TestResult.PASSED, visitor);
+      finishTest(matcher.group(2), matcher.group(3), TestResult.PASSED, visitor);
       return line.length();
     }
     if (FINISHED.matcher(line).find(start)) {

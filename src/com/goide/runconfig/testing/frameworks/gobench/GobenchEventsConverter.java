@@ -41,12 +41,12 @@ public class GobenchEventsConverter extends GoTestEventsConverterBaseImpl {
   protected int processLine(@NotNull String line, int start, Key outputType, ServiceMessageVisitor visitor) throws ParseException {
     Matcher matcher;
     if ((matcher = RUN.matcher(line)).find(start)) {
-      startTest(matcher.group(1), visitor);
+      startTest(matcher.group(2), matcher.group(3), visitor);
       int newStartOffset = findFirstNonWSIndex(line, matcher.end(1));
       return newStartOffset != -1 ? newStartOffset : line.length();
     }
     if ((matcher = FAIL.matcher(line.substring(start))).find()) {
-      finishTest(matcher.group(1), TestResult.FAILED, visitor);
+      finishTest(matcher.group(2), matcher.group(3), TestResult.FAILED, visitor);
       int newStartOffset = findFirstNonWSIndex(line, start + matcher.end(1));
       return newStartOffset != -1 ? newStartOffset : line.length();
     }
@@ -54,13 +54,13 @@ public class GobenchEventsConverter extends GoTestEventsConverterBaseImpl {
   }
 
   @Override
-  protected void startTest(@NotNull String testName, @Nullable ServiceMessageVisitor visitor) throws ParseException {
+  protected void startTest(@NotNull String testName, @NotNull String subtestName, @Nullable ServiceMessageVisitor visitor) throws ParseException {
     String currentTestName = getCurrentTestName();
     if (currentTestName != null && !currentTestName.equals(testName)) {
       // previous test didn't fail, finish it as passed
-      finishTest(currentTestName, TestResult.PASSED, visitor);
+      finishTest(currentTestName, subtestName, TestResult.PASSED, visitor);
     }
-    super.startTest(testName, visitor);
+    super.startTest(testName, subtestName, visitor);
   }
 
   private static int findFirstNonWSIndex(@NotNull String text, int startOffset) {
